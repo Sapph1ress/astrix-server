@@ -70,18 +70,29 @@ function auth(req, res, next) {
   req.token = t;
   next();
 }
-function publicUser(login) {
+function publicUser(login, full) {
   const u = db.users[login];
   if (!u) return null;
-  return {
+  const base = {
     login,
     name: u.name || login,
     bio: u.bio || '',
     color: u.color || '#3d8bfd',
-    photo: u.photo || null,
-    banner: u.banner || null,
-    bannerType: u.bannerType || null,
+    hasPhoto: !!(u.photo),
+    hasBanner: !!(u.banner),
   };
+  // full profile only when explicitly requested (single profile)
+  if (full) {
+    base.photo = u.photo || null;
+    base.banner = u.banner || null;
+    base.bannerType = u.bannerType || null;
+  } else {
+    // tiny thumb optional — skip huge base64 in lists
+    base.photo = null;
+    base.banner = null;
+    base.bannerType = null;
+  }
+  return base;
 }
 function push(login, payload) {
   const set = sockets.get(login);
@@ -138,7 +149,7 @@ app.post('/api/register', (req, res) => {
   };
   const token = tokenFor(login);
   save();
-  res.json({ token, user: publicUser(login) });
+  res.json({ token, user: publicUser(login, true) });
 });
 
 app.post('/api/login', (req, res) => {
@@ -148,7 +159,7 @@ app.post('/api/login', (req, res) => {
   if (!u) return res.status(401).json({ error: 'invalid', message: 'Нет такого аккаунта' });
   if (String(u.password) !== password) return res.status(401).json({ error: 'invalid', message: 'Неверный пароль' });
   const token = tokenFor(login);
-  res.json({ token, user: publicUser(login) });
+  res.json({ token, user: publicUser(login, true) });
 });
 
 app.get('/api/users', auth, (req, res) => {
@@ -159,7 +170,7 @@ app.get('/api/users', auth, (req, res) => {
 });
 
 app.get('/api/profile/:login', auth, (req, res) => {
-  const u = publicUser(normLogin(req.params.login));
+  const u = publicUser(normLogin(req.params.login), true);
   if (!u) return res.status(404).json({ error: 'not_found' });
   res.json({ user: u });
 });
@@ -171,11 +182,17 @@ app.patch('/api/me', auth, (req, res) => {
   if (b.name != null) u.name = String(b.name).slice(0, 24);
   if (b.bio != null) u.bio = String(b.bio).slice(0, 160);
   if (b.color != null) u.color = String(b.color);
-  if (b.photo !== undefined) u.photo = b.photo;
-  if (b.banner !== undefined) u.banner = b.banner;
+  if (b.photo !== undefined) {
+    if (b.photo && String(b.photo).length > 400000) return res.status(400).json({ error: 'photo_too_large', message: 'Фото слишком большое' });
+    u.photo = b.photo;
+  }
+  if (b.banner !== undefined) {
+    if (b.banner && String(b.banner).length > 600000) return res.status(400).json({ error: 'banner_too_large', message: 'Баннер слишком большой' });
+    u.banner = b.banner;
+  }
   if (b.bannerType !== undefined) u.bannerType = b.bannerType;
   save();
-  res.json({ user: publicUser(req.login) });
+  res.json({ user: publicUser(req.login, true) });
 });
 
 app.delete('/api/me', auth, (req, res) => {
